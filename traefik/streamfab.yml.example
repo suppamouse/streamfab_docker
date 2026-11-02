@@ -1,0 +1,20 @@
+# Traefik dynamic configuration (file provider)
+# Copy into your Traefik dynamic config directory and adjust entryPoint,
+# TLS settings, middlewares and the NAS IP to match your setup.
+
+http:
+  routers:
+    streamfab:
+      rule: "Host(`fab.lan.markowildt.net`)"
+      entryPoints:
+        - websecure
+      service: streamfab
+      tls: {}
+      # middlewares:
+      #   - authelia@file
+
+  services:
+    streamfab:
+      loadBalancer:
+        servers:
+          - url: "http://<NAS-IP>:6090"

@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>StreamFab</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='50' fill='%23e53935'/%3E%3Cpath d='M38 28v44l36-22z' fill='white'/%3E%3C/svg%3E"/>
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{background:#1a1a2e;display:flex;flex-direction:column;height:100vh;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
+    #topbar{display:flex;align-items:center;justify-content:space-between;background:#16213e;border-bottom:1px solid #0f3460;padding:8px 16px;gap:12px;flex-shrink:0;z-index:100}
+    .topbar-left{display:flex;align-items:center;gap:10px}
+    .fab-logo{width:28px;height:28px;background:#e53935;border-radius:50%;display:flex;align-items:center;justify-content:center}
+    #topbar h1{font-size:.95rem;font-weight:600;color:#e8eaf6}
+    #status-dot{width:8px;height:8px;border-radius:50%;background:#ef5350;transition:background .4s;flex-shrink:0}
+    #status-dot.connected{background:#66bb6a}
+    #status-text{font-size:.75rem;color:#7986cb}
+    .topbar-right{display:flex;align-items:center;gap:8px}
+    .btn-icon{background:#0f3460;border:1px solid #1a4a8a;color:#90caf9;border-radius:6px;padding:5px 10px;font-size:.75rem;cursor:pointer;transition:all .2s;white-space:nowrap}
+    .btn-icon:hover{background:#1a4a8a;color:#fff}
+    .btn-icon.warn{border-color:#ff7043;color:#ff7043}
+    .btn-icon.ok{border-color:#66bb6a;color:#66bb6a}
+    #timeout-display{font-size:.72rem;color:#546e7a;font-variant-numeric:tabular-nums;min-width:60px;text-align:right}
+    #timeout-display.warning{color:#ff7043}
+    #screen{flex:1;overflow:hidden;position:relative;background:#0d0d1a}
+    #overlay{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:rgba(13,13,26,.92);color:#90caf9;font-size:.95rem;gap:16px;z-index:10}
+    #overlay.hidden{display:none}
+    .spinner{width:36px;height:36px;border:3px solid #1a4a8a;border-top-color:#2c6bed;border-radius:50%;animation:spin .8s linear infinite}
+    @keyframes spin{to{transform:rotate(360deg)}}
+
+    /* Lock screen */
+    #lockscreen{position:absolute;inset:0;background:rgba(10,10,20,.97);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;z-index:50}
+    #lockscreen.hidden{display:none}
+    #lockscreen .lock-icon{font-size:3rem}
+    #lockscreen p{color:#7986cb;font-size:.9rem}
+    #lockscreen .lock-input-wrap{display:flex;flex-direction:column;align-items:center;gap:10px;width:280px}
+    #lockscreen input{width:100%;background:#0f1a2e;border:1px solid #1a4a8a;color:#e8eaf6;padding:10px 14px;border-radius:8px;font-size:.95rem;outline:none;text-align:center}
+    #lockscreen input:focus{border-color:#2c6bed}
+    #lockscreen input.error{border-color:#ef5350;animation:shake .3s}
+    @keyframes shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-6px)}75%{transform:translateX(6px)}}
+    #lockscreen button{background:#2c6bed;color:white;border:none;padding:10px 28px;border-radius:8px;font-size:.9rem;cursor:pointer;width:100%}
+    #lockscreen button:hover{background:#1e4fc7}
+    #lock-error{color:#ef5350;font-size:.8rem;min-height:18px}
+
+    /* Info modal */
+    #info-modal{position:fixed;inset:0;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;z-index:200}
+    #info-modal.hidden{display:none}
+    .modal-box{background:#16213e;border:1px solid #1a4a8a;border-radius:12px;padding:28px;max-width:440px;width:90%;display:flex;flex-direction:column;gap:16px}
+    .modal-box h3{color:#e8eaf6;font-size:1rem;font-weight:700}
+    .modal-box p{color:#90caf9;font-size:.85rem;line-height:1.6}
+    .modal-box .step{background:#0f1a2e;border-radius:8px;padding:12px;font-size:.82rem;color:#b0bec5;line-height:1.7}
+    .modal-box .step code{color:#66bb6a;font-family:monospace}
+    .modal-box button{background:#2c6bed;color:white;border:none;padding:8px 20px;border-radius:6px;cursor:pointer;align-self:flex-end}
+
+    /* Toasts */
+    #toasts{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:10px;z-index:300;pointer-events:none}
+    .toast{background:#1e2a3a;border:1px solid #2c6bed;border-left:4px solid #2c6bed;border-radius:8px;padding:12px 16px;min-width:280px;max-width:380px;pointer-events:all;animation:slideIn .3s ease;box-shadow:0 4px 20px rgba(0,0,0,.4)}
+    .toast.toast-warn{border-color:#ff7043;border-left-color:#ff7043}
+    .toast.toast-ok{border-color:#66bb6a;border-left-color:#66bb6a}
+    @keyframes slideIn{from{opacity:0;transform:translateX(40px)}to{opacity:1;transform:translateX(0)}}
+    .toast-title{font-size:.8rem;font-weight:600;color:#90caf9;margin-bottom:4px}
+    .toast.toast-warn .toast-title{color:#ff7043}
+    .toast.toast-ok .toast-title{color:#66bb6a}
+    .toast-body{font-size:.78rem;color:#b0bec5;line-height:1.5}
+    /* VPN bar */
+    #vpn-bar{display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:center}
+    #vpn-status{font-size:.75rem;color:#7986cb;margin-right:6px;white-space:nowrap}
+    #vpn-status.vpn-on{color:#66bb6a}
+    #vpn-status.busy{color:#ffca28}
+    .btn-vpn{background:#0f3460;border:1px solid #1a4a8a;color:#90caf9;border-radius:6px;padding:5px 10px;font-size:.75rem;cursor:pointer;transition:all .2s;white-space:nowrap}
+    .btn-vpn:hover:not(:disabled){background:#1a4a8a;color:#fff}
+    .btn-vpn.active{background:#2e7d32;border-color:#66bb6a;color:#fff}
+    .btn-vpn:disabled{opacity:.45;cursor:default}
+  </style>
+</head>
+<body>
+
+<div id="topbar">
+  <div class="topbar-left">
+    <div class="fab-logo">
+      <svg viewBox="0 0 100 100" fill="white" width="16" height="16" xmlns="http://www.w3.org/2000/svg">
+        <path d="M38 28v44l36-22z"/>
+      </svg>
+    </div>
+    <h1>StreamFab</h1>
+  </div>
+  <div style="display:flex;align-items:center;gap:8px">
+    <div id="status-dot"></div>
+    <span id="status-text">Connecting…</span>
+  </div>
+  <div id="vpn-bar">
+    <span id="vpn-status">🌐 VPN …</span>
+    <div id="vpn-buttons" style="display:flex;gap:6px"></div>
+  </div>
+  <div class="topbar-right">
+    <button class="btn-icon" id="btn-clipboard" onclick="handleClipboard()">📋 Clipboard</button>
+    <button class="btn-icon" onclick="toggleFullscreen()">⛶ Fullscreen</button>
+    <span id="timeout-display"></span>
+  </div>
+</div>
+
+<div id="screen">
+  <div id="overlay">
+    <div class="spinner"></div>
+    <span id="overlay-text">Verbinde mit StreamFab…</span>
+  </div>
+
+  <!-- Lock screen with password -->
+  <div id="lockscreen" class="hidden">
+    <div class="lock-icon">🔒</div>
+    <p>Session gesperrt — bitte Passwort eingeben</p>
+    <div class="lock-input-wrap">
+      <input type="password" id="lock-pw" placeholder="VNC Passwort" onkeydown="if(event.key==='Enter')unlock()"/>
+      <div id="lock-error"></div>
+      <button onclick="unlock()">Entsperren</button>
+    </div>
+  </div>
+</div>
+
+<!-- Info Modal -->
+<div id="info-modal" class="hidden">
+  <div class="modal-box">
+    <h3 id="modal-title">⚠️ Browser-Berechtigung nicht verfügbar</h3>
+    <p id="modal-desc"></p>
+    <div class="step" id="modal-steps"></div>
+    <button onclick="document.getElementById('info-modal').classList.add('hidden')">Verstanden</button>
+  </div>
+</div>
+
+<div id="toasts"></div>
+
+<script type="module">
+import RFB from './core/rfb.js';
+
+// ── Config aus URL Params ─────────────────────────────────────────────────────
+const params     = new URLSearchParams(location.search);
+const VNC_HOST   = location.hostname;
+const TIMEOUT_SECS = parseInt(params.get('timeout') || '300');
+const IS_SECURE  = location.protocol === 'https:';
+
+// ── State ─────────────────────────────────────────────────────────────────────
+let rfb = null;
+let connected = false;
+let lastActivity = Date.now();
+let locked = false;
+let timeoutTimer = null;
+let reconnectTimer = null;
+let reconnectDelay = 2000;
+let vncPassword = sessionStorage.getItem('vnc_pw') || '';
+
+// ── Connect ───────────────────────────────────────────────────────────────────
+function connect() {
+  const proto = IS_SECURE ? 'wss' : 'ws';
+  const url = `${proto}://${location.host}/websockify`;
+  showOverlay('Verbinde mit StreamFab…');
+  try {
+    rfb = new RFB(document.getElementById('screen'), url);
+    rfb.scaleViewport = true;
+
+    rfb.addEventListener('connect', () => {
+      connected = true;
+      reconnectDelay = 2000;
+      hideOverlay();
+      setStatus(true, 'Connected');
+      loadVpn();
+      if (TIMEOUT_SECS > 0) {
+        startActivityTracking();
+        startTimeoutTimer();
+      }
+    });
+
+    rfb.addEventListener('disconnect', (e) => {
+      connected = false;
+      setStatus(false, 'Disconnected');
+      if (!locked) {
+        showOverlay(e.detail.clean ? 'Verbindung getrennt' : 'Verbindung verloren — reconnecting…');
+        scheduleReconnect();
+      }
+    });
+
+    rfb.addEventListener('credentialsrequired', () => {
+      const saved = sessionStorage.getItem('vnc_pw');
+      if (saved) {
+        vncPassword = saved;
+        rfb.sendCredentials({ password: saved });
+      } else {
+        const pw = prompt('VNC Passwort:');
+        if (pw) {
+          vncPassword = pw;
+          sessionStorage.setItem('vnc_pw', pw);
+          rfb.sendCredentials({ password: pw });
+        }
+      }
+    });
+
+    rfb.addEventListener('clipboard', (e) => {
+      if (e.detail?.text && IS_SECURE) {
+        navigator.clipboard.writeText(e.detail.text).catch(() => {});
+      }
+    });
+
+  } catch(e) {
+    showOverlay('Verbindungsfehler: ' + e.message);
+    scheduleReconnect();
+  }
+}
+
+function scheduleReconnect() {
+  clearTimeout(reconnectTimer);
+  reconnectTimer = setTimeout(() => {
+    reconnectDelay = Math.min(reconnectDelay * 1.5, 30000);
+    connect();
+  }, reconnectDelay);
+}
+
+// ── Status ────────────────────────────────────────────────────────────────────
+function setStatus(ok, text) {
+  document.getElementById('status-dot').className = ok ? 'connected' : '';
+  document.getElementById('status-text').textContent = text;
+}
+function showOverlay(msg) {
+  document.getElementById('overlay').classList.remove('hidden');
+  document.getElementById('overlay-text').textContent = msg;
+}
+function hideOverlay() {
+  document.getElementById('overlay').classList.add('hidden');
+}
+
+// ── Session Timeout ───────────────────────────────────────────────────────────
+function startActivityTracking() {
+  ['mousemove','mousedown','keydown','touchstart'].forEach(ev => {
+    document.getElementById('screen').addEventListener(ev, () => { lastActivity = Date.now(); }, { passive: true });
+  });
+}
+
+function startTimeoutTimer() {
+  clearInterval(timeoutTimer);
+  timeoutTimer = setInterval(() => {
+    if (locked) return;
+    const remaining = TIMEOUT_SECS - Math.floor((Date.now() - lastActivity) / 1000);
+    const display = document.getElementById('timeout-display');
+    if (remaining <= 0) {
+      lockSession();
+    } else {
+      const m = Math.floor(remaining / 60);
+      const s = remaining % 60;
+      display.textContent = `${remaining <= 60 ? '🔒' : '⏱'} ${m}:${s.toString().padStart(2,'0')}`;
+      display.className = remaining <= 60 ? 'warning' : '';
+    }
+  }, 1000);
+}
+
+function lockSession() {
+  locked = true;
+  document.getElementById('lockscreen').classList.remove('hidden');
+  document.getElementById('timeout-display').textContent = '🔒 Gesperrt';
+  document.getElementById('lock-pw').value = '';
+  document.getElementById('lock-error').textContent = '';
+  if (rfb) rfb.disconnect();
+  setTimeout(() => document.getElementById('lock-pw').focus(), 100);
+}
+
+window.unlock = function() {
+  const pw = document.getElementById('lock-pw').value;
+  const input = document.getElementById('lock-pw');
+  const errEl = document.getElementById('lock-error');
+
+  if (!pw || pw.length < 1) {
+    input.classList.add('error');
+    errEl.textContent = '⚠️ Bitte Passwort eingeben';
+    setTimeout(() => input.classList.remove('error'), 500);
+    return;
+  }
+
+  errEl.textContent = '';
+  locked = false;
+  lastActivity = Date.now();
+  document.getElementById('lockscreen').classList.add('hidden');
+  vncPassword = pw;
+  sessionStorage.setItem('vnc_pw', pw);
+
+  const proto = IS_SECURE ? 'wss' : 'ws';
+  const url = `${proto}://${location.host}/websockify`;
+  showOverlay('Reconnecting…');
+
+  try {
+    rfb = new RFB(document.getElementById('screen'), url, {
+      credentials: { password: pw }
+    });
+    rfb.scaleViewport = true;
+    rfb.addEventListener('connect', () => {
+      connected = true;
+      reconnectDelay = 2000;
+      hideOverlay();
+      setStatus(true, 'Connected');
+      loadVpn();
+      if (TIMEOUT_SECS > 0) startTimeoutTimer();
+    });
+    rfb.addEventListener('securityfailure', () => {
+      locked = true;
+      document.getElementById('lockscreen').classList.remove('hidden');
+      const inp = document.getElementById('lock-pw');
+      inp.value = '';
+      inp.classList.add('error');
+      document.getElementById('lock-error').textContent = '❌ Falsches Passwort';
+      setTimeout(() => inp.classList.remove('error'), 500);
+      setTimeout(() => inp.focus(), 100);
+    });
+    rfb.addEventListener('disconnect', (e) => {
+      connected = false;
+      setStatus(false, 'Disconnected');
+      if (!locked) scheduleReconnect();
+    });
+    rfb.addEventListener('clipboard', (e) => {
+      if (e.detail?.text && IS_SECURE) navigator.clipboard.writeText(e.detail.text).catch(() => {});
+    });
+  } catch(e) {
+    showOverlay('Fehler: ' + e.message);
+  }
+};
+
+// ── Clipboard ─────────────────────────────────────────────────────────────────
+window.handleClipboard = async function() {
+  const btn = document.getElementById('btn-clipboard');
+
+  if (!IS_SECURE) {
+    showInfoModal(
+      '📋 Clipboard nicht verfügbar',
+      'Der Browser blockiert den Clipboard-Zugriff weil die Verbindung nicht verschlüsselt ist (HTTP statt HTTPS).',
+      `Lösung: Öffne StreamFab über HTTPS statt HTTP:\n\n` +
+      `• Aktiviere HTTPS in der docker-compose.yml\n` +
+      `• Oder nutze einen Reverse Proxy (z.B. Cloudflare Tunnel)\n\n` +
+      `Technischer Hintergrund: Die Clipboard API ist aus Sicherheitsgründen\nnur in "Secure Contexts" (HTTPS/localhost) verfügbar.`
+    );
+    return;
+  }
+
+  try {
+    const perm = await navigator.permissions.query({ name: 'clipboard-read' });
+    if (perm.state === 'denied') {
+      showInfoModal(
+        '📋 Clipboard-Berechtigung verweigert',
+        'Der Browser hat den Clipboard-Zugriff dauerhaft blockiert.',
+        `So entsperrst du die Berechtigung:\n\n` +
+        `Chrome: 🔒 Schloss in der Adressleiste → Berechtigungen → Zwischenablage → Erlauben\n\n` +
+        `Firefox: Einstellungen → Datenschutz → Berechtigungen → Zwischenablage`
+      );
+      btn.className = 'btn-icon warn';
+      return;
+    }
+
+    const text = await navigator.clipboard.readText();
+    if (rfb && connected && text) {
+      rfb.clipboardPasteFrom(text);
+      toast('✅ Clipboard', `${text.length} Zeichen übertragen`, 'ok');
+      btn.className = 'btn-icon ok';
+      setTimeout(() => btn.className = 'btn-icon', 3000);
+    } else {
+      toast('📋 Clipboard', 'Zwischenablage ist leer oder keine Verbindung', 'warn');
+    }
+  } catch(e) {
+    showInfoModal(
+      '📋 Clipboard-Berechtigung erforderlich',
+      'Der Browser hat nach der Berechtigung gefragt — bitte erlaube den Zugriff in der Browser-Leiste.',
+      `Chrome: Klicke auf das Popup oben in der Adressleiste → "Erlauben"\n\n` +
+      `Firefox: Klicke auf "Erlauben" im Berechtigungs-Dialog\n\n` +
+      `Falls kein Dialog erscheint:\nChrome: 🔒 → Berechtigungen → Zwischenablage → Erlauben`
+    );
+    btn.className = 'btn-icon warn';
+  }
+};
+
+// ── Info Modal ────────────────────────────────────────────────────────────────
+function showInfoModal(title, desc, steps) {
+  document.getElementById('modal-title').textContent = title;
+  document.getElementById('modal-desc').textContent = desc;
+  document.getElementById('modal-steps').textContent = steps;
+  document.getElementById('info-modal').classList.remove('hidden');
+}
+
+// ── Fullscreen ────────────────────────────────────────────────────────────────
+window.toggleFullscreen = function() {
+  if (!document.fullscreenElement) document.documentElement.requestFullscreen();
+  else document.exitFullscreen();
+};
+
+// ── Toast ─────────────────────────────────────────────────────────────────────
+function toast(title, body, type = '', duration = 5000) {
+  const t = document.createElement('div');
+  t.className = `toast${type ? ' toast-'+type : ''}`;
+  t.innerHTML = `<div class="toast-title">${title}</div><div class="toast-body">${body}</div>`;
+  document.getElementById('toasts').appendChild(t);
+  setTimeout(() => t.remove(), duration);
+}
+
+
+// ── VPN ───────────────────────────────────────────────────────────────────────
+const FLAGS = { uk:'🇬🇧', gb:'🇬🇧', us:'🇺🇸', usa:'🇺🇸', au:'🇦🇺', ca:'🇨🇦', de:'🇩🇪', at:'🇦🇹', ch:'🇨🇭',
+                fr:'🇫🇷', nl:'🇳🇱', ie:'🇮🇪', nz:'🇳🇿', jp:'🇯🇵', es:'🇪🇸', it:'🇮🇹', se:'🇸🇪' };
+let vpnCountries = [];
+let vpnState = { mode: 'off', country: '' };
+let vpnBusy = false;
+let vpnLoaded = false;
+
+async function vpnApi(method, path) {
+  const res = await fetch(path, { method, headers: { 'X-Fab-Token': vncPassword || sessionStorage.getItem('vnc_pw') || '' } });
+  let data = {};
+  try { data = await res.json(); } catch (e) { data = { ok: false, error: 'Ungültige Antwort' }; }
+  if (res.status === 401) data.error = 'Nicht autorisiert — VNC-Passwort fehlt';
+  return data;
+}
+
+function countryLabel(id) {
+  return `${FLAGS[id.toLowerCase()] || '🌍'} ${id.toUpperCase()}`;
+}
+
+function renderVpn() {
+  const box = document.getElementById('vpn-buttons');
+  box.innerHTML = '';
+  const mk = (label, active, disabled, title, onclick) => {
+    const b = document.createElement('button');
+    b.className = 'btn-vpn' + (active ? ' active' : '');
+    b.textContent = label;
+    b.disabled = disabled || vpnBusy;
+    if (title) b.title = title;
+    b.onclick = onclick;
+    box.appendChild(b);
+  };
+  mk('🏠 Direkt', vpnState.mode === 'off', false, 'VPN aus — direkte Verbindung', () => vpnAction('off'));
+  vpnCountries.forEach(c => {
+    const active = vpnState.mode === 'vpn' && vpnState.country === c.id;
+    mk(countryLabel(c.id), active, c.servers === 0,
+       c.servers === 0 ? `Keine .conf-Dateien in config/vpn/${c.id}/` : `${c.servers} Server`,
+       () => vpnAction('up', c.id));
+  });
+  mk('↻ Nächster Server', false, vpnState.mode !== 'vpn', 'Anderen Server im selben Land', () => vpnAction('next'));
+}
+
+function renderVpnStatus(s) {
+  const el = document.getElementById('vpn-status');
+  el.className = s.mode === 'vpn' ? 'vpn-on' : '';
+  const where = [s.city, s.location].filter(Boolean).join(', ');
+  const ip = s.ip ? ` · ${s.ip}` : '';
+  el.textContent = s.mode === 'vpn'
+    ? `🔒 ${countryLabel(s.country)} · ${where || '?'}${ip}`
+    : `🌐 Direkt · ${where || '?'}${ip}`;
+  el.title = s.server ? `Server: ${s.server}` : '';
+}
+
+async function loadVpn() {
+  if (vpnLoaded) return;
+  vpnLoaded = true;
+  const c = await vpnApi('GET', '/api/vpn/countries');
+  if (c.ok) vpnCountries = c.countries;
+  await refreshVpnStatus();
+  setInterval(() => { if (!vpnBusy && !locked) refreshVpnStatus(); }, 300000);
+}
+
+async function refreshVpnStatus() {
+  const s = await vpnApi('GET', '/api/vpn/status');
+  if (s.ok) { vpnState = s; renderVpnStatus(s); }
+  else { document.getElementById('vpn-status').textContent = '⚠️ ' + (s.error || 'VPN-Status unbekannt'); }
+  renderVpn();
+}
+
+async function vpnAction(action, country) {
+  if (vpnBusy) return;
+  vpnBusy = true;
+  const el = document.getElementById('vpn-status');
+  el.className = 'busy';
+  el.textContent = action === 'off' ? '⏳ Trenne VPN…'
+                 : action === 'next' ? '⏳ Wechsle Server…'
+                 : `⏳ Verbinde mit ${countryLabel(country)}…`;
+  renderVpn();
+  const path = action === 'up' ? `/api/vpn/up/${encodeURIComponent(country)}` : `/api/vpn/${action}`;
+  const s = await vpnApi('POST', path);
+  vpnBusy = false;
+  if (s.ok) {
+    vpnState = s;
+    renderVpnStatus(s);
+    toast(s.mode === 'vpn' ? '🔒 VPN aktiv' : '🏠 Direkt',
+          s.mode === 'vpn' ? `${countryLabel(s.country)} · ${s.city || ''} ${s.ip || ''}` : `${s.ip || ''}`, 'ok', 4000);
+  } else {
+    toast('⚠️ VPN', s.error || 'Fehler', 'warn', 7000);
+    await refreshVpnStatus();
+    return;
+  }
+  renderVpn();
+}
+
+// ── Startup ───────────────────────────────────────────────────────────────────
+function checkSecureContext() {
+  const clipBtn = document.getElementById('btn-clipboard');
+  if (!IS_SECURE) {
+    clipBtn.className = 'btn-icon warn';
+    clipBtn.title = 'Clipboard benötigt HTTPS — klicke für Details';
+  }
+}
+
+checkSecureContext();
+connect();
+</script>
+</body>
+</html>

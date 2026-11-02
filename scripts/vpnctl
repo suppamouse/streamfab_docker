@@ -1,0 +1,196 @@
+#!/bin/bash
+# ─────────────────────────────────────────────────────────────
+#  vpnctl — WireGuard-Steuerung für den StreamFab-Container
+#  Läuft als root. Ausgabe immer als JSON (für die Web-Oberfläche).
+#
+#  vpnctl countries        Länder (Unterordner von /config/vpn mit .conf-Dateien)
+#  vpnctl up <land>        Mit zufälligem Server aus /config/vpn/<land>/ verbinden
+#  vpnctl next             Anderen Server im selben Land nehmen
+#  vpnctl off              VPN aus (direkte Verbindung)
+#  vpnctl status           Aktueller Modus + öffentliche IP
+# ─────────────────────────────────────────────────────────────
+set -uo pipefail
+
+IFACE=wg0
+VPN_DIR="${VPN_DIR:-/config/vpn}"
+STATE_DIR=/run/fab-vpn
+RESOLV_ORIG="$STATE_DIR/resolv.conf.orig"
+
+mkdir -p "$STATE_DIR"
+chmod 700 "$STATE_DIR"
+
+json_fail() {
+    jq -cn --arg e "$1" '{ok:false, error:$e}'
+    exit 1
+}
+
+# Nur ein Vorgang gleichzeitig
+exec 9>"$STATE_DIR/lock"
+flock -w 90 9 || json_fail "Ein anderer VPN-Vorgang läuft noch."
+
+conf_get() {  # conf_get <Key> <Datei>
+    sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//Ip" "$2" | head -1 | tr -d '\r'
+}
+
+first_ipv4() {  # aus kommagetrennter Liste die erste IPv4 nehmen
+    tr ',' '\n' | tr -d ' ' | grep -v ':' | grep -v '^$' | head -1
+}
+
+do_down() {
+    pkill -f "wireguard-go $IFACE" 2>/dev/null || true
+    ip link del "$IFACE" 2>/dev/null || true
+    for _ in $(seq 1 20); do
+        ip link show "$IFACE" >/dev/null 2>&1 || break
+        sleep 0.25
+    done
+    local ep
+    ep="$(cat "$STATE_DIR/endpoint" 2>/dev/null || true)"
+    [ -n "$ep" ] && ip -4 route del "$ep/32" 2>/dev/null || true
+    if [ -n "$ep" ]; then
+        for net in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16; do
+            ip -4 route del "$net" 2>/dev/null || true
+        done
+    fi
+    [ -f "$RESOLV_ORIG" ] && cat "$RESOLV_ORIG" > /etc/resolv.conf
+    rm -f "$STATE_DIR"/{country,conf,endpoint,key,psk}
+}
+
+connect() {  # connect <conf-datei>
+    local conf="$1" key pub psk ep addr dns ep_host ep_port ep_ip gw gwdev
+    key="$(conf_get PrivateKey "$conf")"
+    pub="$(conf_get PublicKey "$conf")"
+    psk="$(conf_get PresharedKey "$conf")"
+    ep="$(conf_get Endpoint "$conf")"
+    addr="$(conf_get Address "$conf" | first_ipv4)"
+    dns="$(conf_get DNS "$conf" | first_ipv4)"
+
+    if [ -z "$key" ] || [ -z "$pub" ] || [ -z "$ep" ] || [ -z "$addr" ]; then
+        ERR="Ungültige WireGuard-Datei: $(basename "$conf")"; return 1
+    fi
+
+    ep_host="${ep%:*}"; ep_port="${ep##*:}"
+    if [[ "$ep_host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        ep_ip="$ep_host"
+    else
+        ep_ip="$(getent ahostsv4 "$ep_host" | awk '{print $1; exit}')"
+        [ -n "$ep_ip" ] || { ERR="Server nicht auflösbar: $ep_host"; return 1; }
+    fi
+
+    gw="$(ip -4 route show default | awk '{print $3; exit}')"
+    gwdev="$(ip -4 route show default | awk '{print $5; exit}')"
+    [ -n "$gw" ] || { ERR="Kein Default-Gateway gefunden."; return 1; }
+
+    # Kernel-WireGuard versuchen, sonst Userspace (Synology)
+    if ! ip link add "$IFACE" type wireguard 2>/dev/null; then
+        [ -c /dev/net/tun ] || { ERR="/dev/net/tun fehlt — in der docker-compose.yml unter devices eintragen."; return 1; }
+        wireguard-go "$IFACE" >/dev/null 2>&1 || { ERR="wireguard-go konnte nicht starten (NET_ADMIN gesetzt?)."; return 1; }
+        for _ in $(seq 1 20); do
+            ip link show "$IFACE" >/dev/null 2>&1 && break
+            sleep 0.25
+        done
+    fi
+
+    umask 077
+    printf '%s' "$key" > "$STATE_DIR/key"
+    local args=(peer "$pub" endpoint "$ep_ip:$ep_port" allowed-ips 0.0.0.0/0 persistent-keepalive 25)
+    if [ -n "$psk" ]; then
+        printf '%s' "$psk" > "$STATE_DIR/psk"
+        args+=(preshared-key "$STATE_DIR/psk")
+    fi
+    wg set "$IFACE" private-key "$STATE_DIR/key" "${args[@]}" || { ERR="wg set fehlgeschlagen."; return 1; }
+    rm -f "$STATE_DIR/key" "$STATE_DIR/psk"
+
+    ip -4 address add "$addr" dev "$IFACE" || { ERR="Adresse konnte nicht gesetzt werden."; return 1; }
+    ip link set mtu 1420 up dev "$IFACE"
+    echo "$ep_ip" > "$STATE_DIR/endpoint"
+    ip -4 route replace "$ep_ip/32" via "$gw" dev "$gwdev"
+    # Zwei /1-Routen überschreiben die Default-Route, lokale Netze (Traefik, LAN) bleiben direkt
+    ip -4 route add 0.0.0.0/1 dev "$IFACE"
+    ip -4 route add 128.0.0.0/1 dev "$IFACE"
+    # Private Netze (LAN, andere Docker-Netze, Traefik) weiter über das normale Gateway,
+    # damit die Weboberfläche auch bei aktivem VPN erreichbar bleibt
+    local net
+    for net in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16; do
+        ip -4 route replace "$net" via "$gw" dev "$gwdev" 2>/dev/null || true
+    done
+    if [ -n "$dns" ]; then
+        ip -4 route replace "$dns/32" dev "$IFACE"   # VPN-DNS (z. B. 10.2.0.1) durch den Tunnel
+        printf 'nameserver %s\n' "$dns" > /etc/resolv.conf
+    fi
+
+    # Handshake abwarten (etwas Traffic anstoßen)
+    local hs
+    for _ in $(seq 1 30); do
+        [ -n "$dns" ] && timeout 1 bash -c "echo > /dev/udp/$dns/53" 2>/dev/null
+        hs="$(wg show "$IFACE" latest-handshakes 2>/dev/null | awk '{print $2; exit}')"
+        [ "${hs:-0}" -gt 0 ] && return 0
+        sleep 0.5
+    done
+    ERR="Kein Handshake mit $(basename "$conf" .conf) — Server nicht erreichbar."
+    return 1
+}
+
+cmd_countries() {
+    local list='[]' d id n
+    for d in "$VPN_DIR"/*/; do
+        [ -d "$d" ] || continue
+        id="$(basename "$d")"
+        n="$(find "$d" -maxdepth 1 -type f -name '*.conf' | wc -l)"
+        list="$(jq -c --arg id "$id" --argjson n "$n" '. + [{id:$id, servers:$n}]' <<<"$list")"
+    done
+    jq -cn --argjson c "$list" '{ok:true, countries:$c}'
+}
+
+cmd_status() {
+    local mode=off country="" server="" info
+    if ip link show "$IFACE" >/dev/null 2>&1 && [ -f "$STATE_DIR/country" ]; then
+        mode=vpn
+        country="$(cat "$STATE_DIR/country")"
+        server="$(basename "$(cat "$STATE_DIR/conf" 2>/dev/null)" .conf)"
+    fi
+    info="$(curl -s --max-time 8 https://ipinfo.io/json 2>/dev/null)"
+    jq -e . >/dev/null 2>&1 <<<"$info" || info='{}'
+    jq -cn --arg mode "$mode" --arg country "$country" --arg server "$server" --argjson i "$info" \
+        '{ok:true, mode:$mode, country:$country, server:$server,
+          ip:($i.ip // ""), city:($i.city // ""), location:($i.country // "")}'
+}
+
+cmd_up() {
+    local country="${1:-}" dir current conf
+    [[ "$country" =~ ^[A-Za-z0-9_-]+$ ]] || json_fail "Ungültiges Land."
+    dir="$VPN_DIR/$country"
+    [ -d "$dir" ] || json_fail "Ordner $country fehlt unter config/vpn/."
+
+    mapfile -t confs < <(find "$dir" -maxdepth 1 -type f -name '*.conf' | sort)
+    [ "${#confs[@]}" -gt 0 ] || json_fail "Keine .conf-Dateien in config/vpn/$country/."
+
+    current="$(cat "$STATE_DIR/conf" 2>/dev/null || true)"
+    local candidates=()
+    for c in "${confs[@]}"; do
+        [ "$c" != "$current" ] && candidates+=("$c")
+    done
+    [ "${#candidates[@]}" -gt 0 ] || candidates=("${confs[@]}")
+    conf="${candidates[RANDOM % ${#candidates[@]}]}"
+
+    do_down
+    ERR=""
+    if ! connect "$conf"; then
+        do_down
+        json_fail "${ERR:-Verbindung fehlgeschlagen.}"
+    fi
+    echo "$country" > "$STATE_DIR/country"
+    echo "$conf" > "$STATE_DIR/conf"
+    cmd_status
+}
+
+case "${1:-status}" in
+    countries) cmd_countries ;;
+    status)    cmd_status ;;
+    up)        cmd_up "${2:-}" ;;
+    next)
+        c="$(cat "$STATE_DIR/country" 2>/dev/null || true)"
+        [ -n "$c" ] || json_fail "VPN ist aus — erst ein Land wählen."
+        cmd_up "$c" ;;
+    off)       do_down; cmd_status ;;
+    *)         json_fail "Unbekannter Befehl: $1" ;;
+esac

@@ -1,0 +1,6 @@
+# Never commit your actual passwords
+.env
+
+# Laufzeitdaten (Wine-Prefix, WireGuard-Keys, Installer, Logs)
+config/
+update.log

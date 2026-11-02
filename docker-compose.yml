@@ -1,0 +1,39 @@
+services:
+  streamfab:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: streamfab-desktop:local
+    container_name: streamfab-desktop
+    restart: unless-stopped
+
+    environment:
+      PUID: ${PUID:-1026}
+      PGID: ${PGID:-100}
+      TZ: ${TZ:-Europe/Berlin}
+      SCREEN_WIDTH: ${SCREEN_WIDTH:-1600}
+      SCREEN_HEIGHT: ${SCREEN_HEIGHT:-900}
+      VNC_PASSWORD: ${VNC_PASSWORD:-changeme}
+      SESSION_TIMEOUT: ${SESSION_TIMEOUT:-0}
+      VPN_START: ${VPN_START:-off}
+      WINE_DPI: ${WINE_DPI:-96}
+
+    ports:
+      - "6090:6080"   # noVNC + VPN-API (6080 ist schon von Signal belegt)
+
+    volumes:
+      - /volume1/docker/streamfab/config:/config
+      - /volume1/media/downloads/streamfabs:/downloads
+
+    # Für die eingebaute WireGuard-Verbindung (Länderwechsel)
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+
+    shm_size: "512mb"
+    mem_limit: 4g
+    mem_reservation: 512m
+
+    security_opt:
+      - seccomp:unconfined
