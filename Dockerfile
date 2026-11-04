@@ -3,7 +3,7 @@ FROM golang:1-bookworm AS wireguard
 RUN CGO_ENABLED=0 go install golang.zx2c4.com/wireguard@latest
 
 # ── Stage 2: StreamFab Desktop ───────────────────────────────────────────────
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 
 LABEL maintainer="streamfab-docker"
 LABEL description="StreamFab (Windows) via Wine + noVNC browser access, with built-in WireGuard country switcher"
@@ -38,13 +38,15 @@ RUN dpkg --add-architecture i386 && \
     fonts-liberation fonts-dejavu-core \
     # WireGuard / Routing
     wireguard-tools iproute2 \
+    # Vulkan-Loader + Software-Vulkan (verhindert "Failed to load libvulkan")
+    libvulkan1 mesa-vulkan-drivers \
     && sed -i 's/# de_DE.UTF-8/de_DE.UTF-8/' /etc/locale.gen && locale-gen \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Wine (WineHQ Staging, aktuellste Version) ────────────────────────────────
 RUN mkdir -pm755 /etc/apt/keyrings && \
     wget -qO /etc/apt/keyrings/winehq-archive.key https://dl.winehq.org/wine-builds/winehq.key && \
-    wget -qNP /etc/apt/sources.list.d/ https://dl.winehq.org/wine-builds/debian/dists/bookworm/winehq-bookworm.sources && \
+    wget -qNP /etc/apt/sources.list.d/ https://dl.winehq.org/wine-builds/debian/dists/trixie/winehq-trixie.sources && \
     apt-get update && \
     apt-get install -y --install-recommends winehq-staging && \
     rm -rf /var/lib/apt/lists/*

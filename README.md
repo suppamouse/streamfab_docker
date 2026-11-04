@@ -2,7 +2,7 @@
 
 > **StreamFab (Windows) in your browser** — Wine in a container, noVNC access, one-click VPN country switching. No Windows license, no VM.
 
-Built on the same pattern as [signal-messenger](https://github.com/suppamouse/signal-messenger): `debian:bookworm-slim` + Xvfb + Openbox + x11vnc + noVNC, with a custom web page in front.
+Built on the same pattern as [signal-messenger](https://github.com/suppamouse/signal-messenger): `debian:trixie-slim` + Xvfb + Openbox + x11vnc + noVNC, with a custom web page in front.
 
 ---
 
